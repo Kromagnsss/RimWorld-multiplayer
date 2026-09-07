@@ -5,9 +5,7 @@ source <(curl -fsSL https://raw.githubusercontent.com/community-scripts/ProxmoxV
 # Copyright (c) 2026
 # License: MIT
 #
-# Source:
-# https://github.com/rwmt/Multiplayer
-#
+# Source: https://github.com/rwmt/Multiplayer
 # RimWorld Multiplayer Dedicated Server
 # Default port: UDP 30502
 
@@ -26,136 +24,89 @@ variables
 color
 catch_errors
 
-
-# ---------------------------------------------------------
-# Configuration
-# ---------------------------------------------------------
-
 INSTALL_DIR="/opt/rimworld-multiplayer"
 SERVICE_NAME="rimworld-multiplayer"
 REPO="rwmt/Multiplayer"
 RELEASE="continuous"
-
 DOWNLOAD_URL="https://github.com/${REPO}/releases/download/${RELEASE}/Server-beta.zip"
-
-VERSION_FILE="${INSTALL_DIR}/version.txt"
-
-
-# ---------------------------------------------------------
-# Installation / Update
-# ---------------------------------------------------------
 
 function install_server() {
 
-    msg_info "Installing dependencies"
+  msg_info "Installing dependencies"
 
-    $STD apt-get update
+  $STD pct exec "$CTID" -- bash -c \
+    'apt-get update && apt-get install -y curl unzip ca-certificates wget file'
 
-    $STD apt-get install -y \
-        curl \
-        unzip \
-        ca-certificates \
-        wget \
-        file
-
-    msg_ok "Installed dependencies"
+  msg_ok "Installed dependencies"
 
 
-    msg_info "Creating installation directory"
+  msg_info "Creating installation directory"
 
-    mkdir -p "$INSTALL_DIR"
+  $STD pct exec "$CTID" -- mkdir -p "$INSTALL_DIR"
 
-    msg_ok "Created installation directory"
+  msg_ok "Created installation directory"
 
 
-    msg_info "Downloading RimWorld Multiplayer Server"
+  msg_info "Downloading RimWorld Multiplayer Server"
 
-    cd "$INSTALL_DIR"
-
+  $STD pct exec "$CTID" -- bash -c "
+    cd '$INSTALL_DIR'
     rm -f Server-beta.zip
+    curl -L --fail --retry 5 --retry-delay 3 \
+      -o Server-beta.zip \
+      '$DOWNLOAD_URL'
+  "
 
-    $STD curl -L \
-        --fail \
-        --retry 5 \
-        --retry-delay 3 \
-        -o Server-beta.zip \
-        "$DOWNLOAD_URL"
-
-    msg_ok "Downloaded server"
+  msg_ok "Downloaded server"
 
 
-    msg_info "Extracting server"
+  msg_info "Extracting server"
 
-    rm -rf "${INSTALL_DIR}/Server"
-
-    $STD unzip -q Server-beta.zip
-
+  $STD pct exec "$CTID" -- bash -c "
+    cd '$INSTALL_DIR'
+    rm -rf Server
+    unzip -q Server-beta.zip
     rm -f Server-beta.zip
+  "
 
-    msg_ok "Extracted server"
-
-
-    # -----------------------------------------------------
-    # Locate Linux server
-    # -----------------------------------------------------
-
-    SERVER_SCRIPT=$(find "$INSTALL_DIR" \
-        -type f \
-        -path "*/Server/Linux/Server.sh" \
-        | head -n 1)
-
-    if [[ -z "$SERVER_SCRIPT" ]]; then
-
-        SERVER_SCRIPT=$(find "$INSTALL_DIR" \
-            -type f \
-            -name "Server.sh" \
-            | head -n 1)
-
-    fi
+  msg_ok "Extracted server"
 
 
-    if [[ -z "$SERVER_SCRIPT" ]]; then
+  msg_info "Configuring RimWorld Multiplayer Server"
 
-        msg_error "Server.sh not found"
+  $STD pct exec "$CTID" -- bash -s <<'EOF'
 
-        find "$INSTALL_DIR" -maxdepth 5 -type f
+set -e
 
-        exit 1
+INSTALL_DIR="/opt/rimworld-multiplayer"
+SERVICE_NAME="rimworld-multiplayer"
 
-    fi
+SERVER_SCRIPT=$(find "$INSTALL_DIR" \
+  -type f \
+  -path "*/Server/Linux/Server.sh" \
+  | head -n 1)
+
+if [[ -z "$SERVER_SCRIPT" ]]; then
+  SERVER_SCRIPT=$(find "$INSTALL_DIR" \
+    -type f \
+    -name "Server.sh" \
+    | head -n 1)
+fi
+
+if [[ -z "$SERVER_SCRIPT" ]]; then
+  echo "ERROR: Server.sh not found"
+  find "$INSTALL_DIR" -maxdepth 6 -type f
+  exit 1
+fi
+
+SERVER_DIR="$(dirname "$SERVER_SCRIPT")"
+
+chmod +x "$SERVER_SCRIPT"
+
+echo "$SERVER_DIR" > "$INSTALL_DIR/server_dir.txt"
 
 
-    SERVER_DIR="$(dirname "$SERVER_SCRIPT")"
-
-    chmod +x "$SERVER_SCRIPT"
-
-    echo "$SERVER_DIR" > "${INSTALL_DIR}/server_dir.txt"
-
-    msg_ok "Linux server found"
-
-
-    # -----------------------------------------------------
-    # Version information
-    # -----------------------------------------------------
-
-    RELEASE_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-
-    cat > "$VERSION_FILE" <<EOF
-release=${RELEASE}
-download=${DOWNLOAD_URL}
-installed=${RELEASE_DATE}
-EOF
-
-    msg_ok "Version information saved"
-
-
-    # -----------------------------------------------------
-    # systemd service
-    # -----------------------------------------------------
-
-    msg_info "Creating systemd service"
-
-    cat > "/etc/systemd/system/${SERVICE_NAME}.service" <<EOF
+cat > "/etc/systemd/system/${SERVICE_NAME}.service" <<SERVICE
 [Unit]
 Description=RimWorld Multiplayer Dedicated Server
 After=network-online.target
@@ -163,14 +114,11 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-
+User=root
 WorkingDirectory=${SERVER_DIR}
-
 ExecStart=${SERVER_SCRIPT}
-
 Restart=always
 RestartSec=5
-
 KillSignal=SIGINT
 TimeoutStopSec=30
 
@@ -179,174 +127,161 @@ TimeoutStopSec=30
 
 [Install]
 WantedBy=multi-user.target
-EOF
-
-    systemctl daemon-reload
-
-    systemctl enable "$SERVICE_NAME"
-
-    msg_ok "Created systemd service"
+SERVICE
 
 
-    # -----------------------------------------------------
-    # Helper commands
-    # -----------------------------------------------------
-
-    cat > /usr/local/bin/rimworld-server <<'EOF'
+cat > /usr/local/bin/rimworld-server <<'COMMANDS'
 #!/usr/bin/env bash
 
 case "$1" in
 
-    start)
-        systemctl start rimworld-multiplayer
-        ;;
+  start)
+    systemctl start rimworld-multiplayer
+    ;;
 
-    stop)
-        systemctl stop rimworld-multiplayer
-        ;;
+  stop)
+    systemctl stop rimworld-multiplayer
+    ;;
 
-    restart)
-        systemctl restart rimworld-multiplayer
-        ;;
+  restart)
+    systemctl restart rimworld-multiplayer
+    ;;
 
-    status)
-        systemctl status rimworld-multiplayer
-        ;;
+  status)
+    systemctl status rimworld-multiplayer --no-pager
+    ;;
 
-    logs)
-        journalctl -u rimworld-multiplayer -f
-        ;;
+  logs)
+    journalctl -u rimworld-multiplayer -f
+    ;;
 
-    update)
-        /usr/local/sbin/rimworld-update
-        ;;
+  update)
+    /usr/local/sbin/rimworld-update
+    ;;
 
-    *)
-        echo "Usage:"
-        echo "  rimworld-server start"
-        echo "  rimworld-server stop"
-        echo "  rimworld-server restart"
-        echo "  rimworld-server status"
-        echo "  rimworld-server logs"
-        echo "  rimworld-server update"
-        ;;
+  *)
+    echo "Usage:"
+    echo "  rimworld-server start"
+    echo "  rimworld-server stop"
+    echo "  rimworld-server restart"
+    echo "  rimworld-server status"
+    echo "  rimworld-server logs"
+    echo "  rimworld-server update"
+    exit 1
+    ;;
 
 esac
-EOF
+COMMANDS
 
-    chmod +x /usr/local/bin/rimworld-server
+chmod +x /usr/local/bin/rimworld-server
 
 
-    # -----------------------------------------------------
-    # Update command inside the container
-    # -----------------------------------------------------
-
-    cat > /usr/local/sbin/rimworld-update <<'EOF'
+cat > /usr/local/sbin/rimworld-update <<'UPDATE'
 #!/usr/bin/env bash
 
-set -e
+set -euo pipefail
 
 INSTALL_DIR="/opt/rimworld-multiplayer"
 SERVICE_NAME="rimworld-multiplayer"
 
 DOWNLOAD_URL="https://github.com/rwmt/Multiplayer/releases/download/continuous/Server-beta.zip"
 
-echo
-echo "=============================================="
-echo " RimWorld Multiplayer Server Update"
-echo "=============================================="
-echo
-
-echo "[1/5] Stopping server..."
-
-systemctl stop "$SERVICE_NAME" || true
-
-
-echo "[2/5] Downloading current release..."
-
 TMP_DIR=$(mktemp -d)
 
 trap 'rm -rf "$TMP_DIR"' EXIT
 
+
+echo "Stopping RimWorld Multiplayer Server..."
+
+systemctl stop "$SERVICE_NAME" || true
+
+
+echo "Downloading latest server..."
+
 curl -L \
-    --fail \
-    --retry 5 \
-    --retry-delay 3 \
-    -o "$TMP_DIR/Server-beta.zip" \
-    "$DOWNLOAD_URL"
+  --fail \
+  --retry 5 \
+  --retry-delay 3 \
+  -o "$TMP_DIR/Server-beta.zip" \
+  "$DOWNLOAD_URL"
 
 
-echo "[3/5] Installing new version..."
+echo "Extracting latest server..."
 
-mkdir -p "$TMP_DIR/new"
-
-unzip -q "$TMP_DIR/Server-beta.zip" \
-    -d "$TMP_DIR/new"
+unzip -q \
+  "$TMP_DIR/Server-beta.zip" \
+  -d "$TMP_DIR/new"
 
 
 SERVER_SCRIPT=$(find "$TMP_DIR/new" \
+  -type f \
+  -path "*/Server/Linux/Server.sh" \
+  | head -n 1)
+
+if [[ -z "$SERVER_SCRIPT" ]]; then
+  SERVER_SCRIPT=$(find "$TMP_DIR/new" \
     -type f \
-    -path "*/Server/Linux/Server.sh" \
+    -name "Server.sh" \
     | head -n 1)
-
-if [[ -z "$SERVER_SCRIPT" ]]; then
-
-    SERVER_SCRIPT=$(find "$TMP_DIR/new" \
-        -type f \
-        -name "Server.sh" \
-        | head -n 1)
-
 fi
 
 if [[ -z "$SERVER_SCRIPT" ]]; then
-    echo
-    echo "ERROR: Server.sh not found in downloaded archive."
-    echo
-    systemctl start "$SERVICE_NAME" || true
-    exit 1
+  echo "ERROR: Server.sh not found"
+  systemctl start "$SERVICE_NAME" || true
+  exit 1
 fi
 
 
-# Preserve the complete server directory structure.
-rm -rf "${INSTALL_DIR}/Server"
+rm -rf "$INSTALL_DIR/Server"
 
 if [[ -d "$TMP_DIR/new/Server" ]]; then
 
-    cp -a "$TMP_DIR/new/Server" \
-        "${INSTALL_DIR}/Server"
+  cp -a \
+    "$TMP_DIR/new/Server" \
+    "$INSTALL_DIR/Server"
 
 else
 
-    cp -a "$TMP_DIR/new"/* \
-        "${INSTALL_DIR}/"
+  cp -a \
+    "$TMP_DIR/new"/* \
+    "$INSTALL_DIR/"
 
 fi
 
-
-echo "[4/5] Updating permissions..."
 
 SERVER_SCRIPT=$(find "$INSTALL_DIR" \
-    -type f \
-    -path "*/Server/Linux/Server.sh" \
-    | head -n 1)
+  -type f \
+  -path "*/Server/Linux/Server.sh" \
+  | head -n 1)
 
 if [[ -z "$SERVER_SCRIPT" ]]; then
-
-    SERVER_SCRIPT=$(find "$INSTALL_DIR" \
-        -type f \
-        -name "Server.sh" \
-        | head -n 1)
-
+  SERVER_SCRIPT=$(find "$INSTALL_DIR" \
+    -type f \
+    -name "Server.sh" \
+    | head -n 1)
 fi
+
+if [[ -z "$SERVER_SCRIPT" ]]; then
+  echo "ERROR: Server.sh not found after installation"
+  exit 1
+fi
+
 
 chmod +x "$SERVER_SCRIPT"
 
-SERVER_DIR=$(dirname "$SERVER_SCRIPT")
+SERVER_DIR="$(dirname "$SERVER_SCRIPT")"
 
-echo "$SERVER_DIR" > "${INSTALL_DIR}/server_dir.txt"
+echo "$SERVER_DIR" > "$INSTALL_DIR/server_dir.txt"
 
 
-echo "[5/5] Starting server..."
+sed -i \
+  "s|^WorkingDirectory=.*|WorkingDirectory=${SERVER_DIR}|" \
+  "/etc/systemd/system/${SERVICE_NAME}.service"
+
+sed -i \
+  "s|^ExecStart=.*|ExecStart=${SERVER_SCRIPT}|" \
+  "/etc/systemd/system/${SERVICE_NAME}.service"
+
 
 systemctl daemon-reload
 
@@ -354,83 +289,51 @@ systemctl start "$SERVICE_NAME"
 
 
 echo
-echo "=============================================="
-echo " Update completed"
-echo "=============================================="
+echo "RimWorld Multiplayer Server updated successfully."
 echo
-echo "Server directory:"
-echo "$SERVER_DIR"
-echo
-echo "Service status:"
 systemctl --no-pager --full status "$SERVICE_NAME" || true
-echo
+
+UPDATE
+
+chmod +x /usr/local/sbin/rimworld-update
+
+
+systemctl daemon-reload
+
+systemctl enable --now "$SERVICE_NAME"
 
 EOF
 
-    chmod +x /usr/local/sbin/rimworld-update
-
-
-    # -----------------------------------------------------
-    # Start server
-    # -----------------------------------------------------
-
-    msg_info "Starting RimWorld Multiplayer Server"
-
-    systemctl daemon-reload
-
-    systemctl enable --now "$SERVICE_NAME"
-
-    msg_ok "Started RimWorld Multiplayer Server"
-
+  msg_ok "Configured and started RimWorld Multiplayer Server"
 }
 
-
-# ---------------------------------------------------------
-# Community Scripts UPDATE command
-# ---------------------------------------------------------
 
 function update_script() {
 
-    header_info
+  header_info
 
-    check_container_storage
-    check_container_resources
+  check_container_storage
+  check_container_resources
 
+  if ! $STD pct exec "$CTID" -- test -d "$INSTALL_DIR"; then
+    msg_error "No ${APP} installation found!"
+    exit 1
+  fi
 
-    if [[ ! -d "$INSTALL_DIR" ]]; then
+  msg_info "Updating ${APP}"
 
-        msg_error "No ${APP} Installation Found!"
+  $STD pct exec "$CTID" -- /usr/local/sbin/rimworld-update
 
-        exit
+  msg_ok "Updated ${APP}"
 
-    fi
-
-
-    msg_info "Updating ${APP}"
-
-    /usr/local/sbin/rimworld-update
-
-    msg_ok "Updated ${APP}"
-
-    msg_ok "Updated successfully!"
-
-    exit
-
+  exit
 }
 
-
-# ---------------------------------------------------------
-# Create LXC
-# ---------------------------------------------------------
 
 start
 
 build_container
 
-
-# ---------------------------------------------------------
-# Install application inside LXC
-# ---------------------------------------------------------
 
 msg_info "Installing ${APP}"
 
@@ -439,26 +342,25 @@ install_server
 msg_ok "Installed ${APP}"
 
 
-# ---------------------------------------------------------
-# Finish
-# ---------------------------------------------------------
-
 description
 
-msg_ok "Completed successfully!\n"
 
-echo -e "${CREATING}${GN}${APP} setup has been successfully initialized!${CL}"
-
-echo
-echo -e "${INFO}${YW}RimWorld Multiplayer:${CL}"
-echo -e "${TAB}${GATEWAY}${BGN}UDP 30502${CL}"
+msg_ok "Completed successfully!"
 
 echo
-echo -e "${INFO}${YW}Server commands:${CL}"
-echo -e "${TAB}${YW}systemctl status ${SERVICE_NAME}${CL}"
-echo -e "${TAB}${YW}systemctl restart ${SERVICE_NAME}${CL}"
-echo -e "${TAB}${YW}journalctl -u ${SERVICE_NAME} -f${CL}"
+echo -e "${INFO}${YW}RimWorld Multiplayer${CL}"
+echo -e "${TAB}${GATEWAY}UDP 30502${CL}"
+
+echo
+echo -e "${INFO}${YW}Server status:${CL}"
+echo -e "${TAB}systemctl status ${SERVICE_NAME}"
+
+echo
+echo -e "${INFO}${YW}Server logs:${CL}"
+echo -e "${TAB}journalctl -u ${SERVICE_NAME} -f"
+
 echo
 echo -e "${INFO}${YW}Update:${CL}"
-echo -e "${TAB}${YW}update${CL}"
+echo -e "${TAB}update"
+
 echo
