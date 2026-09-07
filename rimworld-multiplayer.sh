@@ -39,8 +39,6 @@ SERVICE_NAME="rimworld-multiplayer"
 
 DOWNLOAD_URL="https://github.com/rwmt/Multiplayer/releases/download/continuous/Server-beta.zip"
 
-DOTNET_VERSION="8.0"
-
 
 # ==============================================================================
 # UPDATE
@@ -53,22 +51,26 @@ function update_script() {
     check_container_storage
     check_container_resources
 
-    if [[ ! -f "${INSTALL_DIR}/Server/Linux/Server.dll" ]]; then
+    if [[ ! -f "${SERVER_DIR}/Server.dll" ]]; then
         msg_error "No ${APP} installation found!"
         exit 1
     fi
 
-    msg_info "Updating ${APP}"
+    msg_info "Stopping ${APP}"
 
     systemctl stop "${SERVICE_NAME}" 2>/dev/null || true
+
+    msg_ok "Server stopped"
+
+
+    msg_info "Downloading latest RimWorld Multiplayer server"
 
     TMP_DIR="$(mktemp -d)"
 
     trap 'rm -rf "$TMP_DIR"' EXIT
 
-    msg_info "Downloading latest RimWorld Multiplayer server"
-
-    curl -L \
+    curl \
+        -L \
         --fail \
         --retry 5 \
         --retry-delay 3 \
@@ -76,6 +78,7 @@ function update_script() {
         "${DOWNLOAD_URL}"
 
     msg_ok "Downloaded latest server"
+
 
     msg_info "Extracting update"
 
@@ -86,11 +89,12 @@ function update_script() {
         -d "${TMP_DIR}/new"
 
     if [[ ! -f "${TMP_DIR}/new/Server/Linux/Server.dll" ]]; then
-        msg_error "Invalid server archive: Server/Linux/Server.dll not found"
+        msg_error "Invalid archive: Server/Linux/Server.dll not found"
         exit 1
     fi
 
     msg_ok "Archive verified"
+
 
     msg_info "Installing update"
 
@@ -104,10 +108,33 @@ function update_script() {
 
     msg_ok "Server files updated"
 
+
+    msg_info "Starting ${APP}"
+
     systemctl daemon-reload
     systemctl start "${SERVICE_NAME}"
 
-    msg_ok "Started ${APP}"
+    sleep 2
+
+    if ! systemctl is-active --quiet "${SERVICE_NAME}"; then
+
+        msg_error "Server failed to start after update"
+
+        systemctl status \
+            "${SERVICE_NAME}" \
+            --no-pager \
+            || true
+
+        journalctl \
+            -u "${SERVICE_NAME}" \
+            -n 30 \
+            --no-pager \
+            || true
+
+        exit 1
+    fi
+
+    msg_ok "Server started"
     msg_ok "Updated successfully!"
 
     exit 0
@@ -115,13 +142,13 @@ function update_script() {
 
 
 # ==============================================================================
-# INSTALLATION
+# INSTALL
 # ==============================================================================
 
 function install_rimworld() {
 
     # --------------------------------------------------------------------------
-    # Dependencies
+    # Basic dependencies
     # --------------------------------------------------------------------------
 
     msg_info "Installing dependencies"
@@ -132,8 +159,7 @@ function install_rimworld() {
         ca-certificates \
         curl \
         wget \
-        unzip \
-        file
+        unzip
 
     msg_ok "Installed dependencies"
 
@@ -142,7 +168,7 @@ function install_rimworld() {
     # Microsoft repository
     # --------------------------------------------------------------------------
 
-    msg_info "Installing Microsoft package repository"
+    msg_info "Configuring Microsoft repository"
 
     if [[ ! -f /etc/apt/sources.list.d/microsoft-prod.list ]]; then
 
@@ -151,7 +177,15 @@ function install_rimworld() {
             "https://packages.microsoft.com/config/debian/13/packages-microsoft-prod.deb" \
             -O /tmp/packages-microsoft-prod.deb
 
-        dpkg -i /tmp/packages-microsoft-prod.deb
+        if [[ ! -f /tmp/packages-microsoft-prod.deb ]]; then
+            msg_error "Unable to download Microsoft repository package"
+            exit 1
+        fi
+
+        dpkg \
+            -i \
+            /tmp/packages-microsoft-prod.deb \
+            >/dev/null
 
         rm -f /tmp/packages-microsoft-prod.deb
 
@@ -161,27 +195,27 @@ function install_rimworld() {
 
 
     # --------------------------------------------------------------------------
-    # .NET 8 Runtime
+    # .NET 8
     # --------------------------------------------------------------------------
 
-    msg_info "Installing .NET ${DOTNET_VERSION} Runtime"
+    msg_info "Installing .NET 8 Runtime"
 
     $STD apt-get update
 
     $STD apt-get install -y dotnet-runtime-8.0
 
     if ! command -v dotnet >/dev/null 2>&1; then
-        msg_error ".NET Runtime installation failed"
+        msg_error ".NET installation failed"
         exit 1
     fi
 
-    if ! dotnet --list-runtimes | grep -q "^Microsoft.NETCore.App 8\.0"; then
+    if ! dotnet --list-runtimes | grep -q '^Microsoft.NETCore.App 8\.0'; then
         msg_error ".NET 8 Runtime not found"
         dotnet --list-runtimes
         exit 1
     fi
 
-    msg_ok "Installed .NET ${DOTNET_VERSION} Runtime"
+    msg_ok "Installed .NET 8 Runtime"
 
 
     # --------------------------------------------------------------------------
@@ -196,7 +230,7 @@ function install_rimworld() {
 
 
     # --------------------------------------------------------------------------
-    # Download server
+    # Download
     # --------------------------------------------------------------------------
 
     msg_info "Downloading RimWorld Multiplayer Server"
@@ -213,6 +247,11 @@ function install_rimworld() {
         -o Server-beta.zip \
         "${DOWNLOAD_URL}"
 
+    if [[ ! -s Server-beta.zip ]]; then
+        msg_error "Server download failed"
+        exit 1
+    fi
+
     msg_ok "Downloaded server"
 
 
@@ -224,19 +263,20 @@ function install_rimworld() {
 
     rm -rf "${INSTALL_DIR}/Server"
 
-    unzip -q \
-        "${INSTALL_DIR}/Server-beta.zip" \
+    unzip \
+        -q \
+        Server-beta.zip \
         -d "${INSTALL_DIR}"
 
-    rm -f "${INSTALL_DIR}/Server-beta.zip"
+    rm -f Server-beta.zip
 
     if [[ ! -f "${SERVER_DIR}/Server.dll" ]]; then
-        msg_error "Invalid archive: Server/Linux/Server.dll not found"
+        msg_error "Server/Linux/Server.dll not found"
         exit 1
     fi
 
     if [[ ! -f "${SERVER_DIR}/Server.sh" ]]; then
-        msg_error "Invalid archive: Server/Linux/Server.sh not found"
+        msg_error "Server/Linux/Server.sh not found"
         exit 1
     fi
 
@@ -246,46 +286,22 @@ function install_rimworld() {
 
 
     # --------------------------------------------------------------------------
-    # Verify .NET runtime configuration
+    # Verify runtime
     # --------------------------------------------------------------------------
 
-    msg_info "Checking server runtime"
+    msg_info "Checking .NET runtime configuration"
 
     if ! grep -q '"tfm": "net8.0"' \
         "${SERVER_DIR}/Server.runtimeconfig.json"; then
 
-        msg_error "The RimWorld server does not target .NET 8"
+        msg_error "Server does not target .NET 8"
+
         cat "${SERVER_DIR}/Server.runtimeconfig.json"
+
         exit 1
     fi
 
-    msg_ok "RimWorld server requires .NET 8"
-
-
-    # --------------------------------------------------------------------------
-    # Test server
-    # --------------------------------------------------------------------------
-
-    msg_info "Testing RimWorld Multiplayer Server"
-
-    if ! timeout 5 \
-        "${SERVER_DIR}/Server.sh" \
-        >/tmp/rimworld-test.log 2>&1; then
-
-        TEST_EXIT=$?
-
-        # timeout returns 124 when the server is still running,
-        # which is a successful test for a long-running server.
-        if [[ "${TEST_EXIT}" != "124" ]]; then
-            cat /tmp/rimworld-test.log
-            msg_error "RimWorld Multiplayer Server failed to start"
-            exit 1
-        fi
-    fi
-
-    rm -f /tmp/rimworld-test.log
-
-    msg_ok "Server executable works"
+    msg_ok "Server requires .NET 8"
 
 
     # --------------------------------------------------------------------------
@@ -310,8 +326,8 @@ RestartSec=5
 KillSignal=SIGINT
 TimeoutStopSec=30
 
-# RimWorld Multiplayer uses UDP port 30502 by default.
-# No --port parameter is required.
+# RimWorld Multiplayer default port
+# UDP 30502
 
 [Install]
 WantedBy=multi-user.target
@@ -361,7 +377,7 @@ case "$1" in
 
     *)
         echo
-        echo "RimWorld Multiplayer Server"
+        echo "RimWorld Multiplayer Dedicated Server"
         echo
         echo "Usage:"
         echo
@@ -385,12 +401,11 @@ EOF
 
 
     # --------------------------------------------------------------------------
-    # Server information
+    # README
     # --------------------------------------------------------------------------
 
     cat > "${INSTALL_DIR}/README.txt" <<EOF
 RimWorld Multiplayer Dedicated Server
-=====================================
 
 Installation:
 ${INSTALL_DIR}
@@ -407,33 +422,34 @@ Port:
 Service:
 ${SERVICE_NAME}
 
-Commands:
-
+Status:
 systemctl status ${SERVICE_NAME}
+
+Start:
 systemctl start ${SERVICE_NAME}
+
+Stop:
 systemctl stop ${SERVICE_NAME}
+
+Restart:
 systemctl restart ${SERVICE_NAME}
 
 Logs:
-
 journalctl -u ${SERVICE_NAME} -f
 
 Management:
-
+rimworld-server status
+rimworld-server logs
 rimworld-server start
 rimworld-server stop
 rimworld-server restart
-rimworld-server status
-rimworld-server logs
 rimworld-server update
 
 Update:
-
 update
 
-.NET Runtime:
-
-.NET 8
+.NET:
+.NET 8 Runtime
 EOF
 
 
@@ -445,16 +461,20 @@ EOF
 
     systemctl start "${SERVICE_NAME}"
 
-    sleep 2
+    sleep 3
 
     if ! systemctl is-active --quiet "${SERVICE_NAME}"; then
 
         msg_error "RimWorld Multiplayer Server failed to start"
 
+        echo
+
         systemctl status \
             "${SERVICE_NAME}" \
             --no-pager \
             || true
+
+        echo
 
         journalctl \
             -u "${SERVICE_NAME}" \
@@ -465,18 +485,18 @@ EOF
         exit 1
     fi
 
-    msg_ok "RimWorld Multiplayer Server started"
+    msg_ok "RimWorld Multiplayer Server is running"
 
 
     # --------------------------------------------------------------------------
-    # Verify UDP port
+    # UDP port
     # --------------------------------------------------------------------------
 
     if ss -lun | grep -q ':30502 '; then
-        msg_ok "UDP port 30502 is listening"
+        msg_ok "UDP 30502 is listening"
     else
-        msg_warn "UDP port 30502 is not detected yet"
-        msg_warn "Check: ss -lunp | grep 30502"
+        msg_warn "UDP 30502 is not detected yet"
+        msg_warn "Check with: ss -lunp | grep 30502"
     fi
 }
 
@@ -500,22 +520,18 @@ description
 msg_ok "Completed successfully!"
 
 echo
-
 echo -e "${INFO}${YW}RimWorld Multiplayer Server${CL}"
 echo -e "${TAB}${GATEWAY}UDP 30502${CL}"
 
 echo
-
 echo -e "${INFO}${YW}Service:${CL}"
 echo -e "${TAB}systemctl status ${SERVICE_NAME}${CL}"
 
 echo
-
 echo -e "${INFO}${YW}Logs:${CL}"
 echo -e "${TAB}journalctl -u ${SERVICE_NAME} -f${CL}"
 
 echo
-
 echo -e "${INFO}${YW}Management:${CL}"
 echo -e "${TAB}rimworld-server status${CL}"
 echo -e "${TAB}rimworld-server logs${CL}"
