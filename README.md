@@ -1,15 +1,14 @@
 # RimWorld Multiplayer
 
-Script d'installation de RimWorld Multiplayer.
+Script d'installation de RimWorld Multiplayer sur un serveur ProxMox.
 
-## Prérequis
+## Prérequis sur les machines de jeu qui se connecteront au serveur
 
-Installez les mods suivants avant d'exécuter le script :
-
+Installez les mods suivants sur les machines de jeu :
 - [Prepatcher — Zetrith](https://github.com/Zetrith/Prepatcher)
 - [Multiplayer — Zetrith](https://github.com/Zetrith/Multiplayer)
 
-## Installation
+## Installation du serveur sur le ProxMox
 
 Exécutez les commandes suivantes dans votre terminal :
 
